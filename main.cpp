@@ -1,10 +1,10 @@
 #include <Eigen/Dense>
 #include <igl/bounding_box.h>
 #include <igl/fast_winding_number.h>
-#include <igl/knn.h>
 #include <igl/opengl/glfw/Viewer.h>
 #include <igl/random_points_on_mesh.h>
 #include <igl/readSTL.h>
+#include <igl/slice_mask.h>
 #include <iostream>
 
 template <typename DerivedV>
@@ -37,7 +37,7 @@ int main(int argc, char *argv[]) {
     std::cout << "M:\n" << M << std::endl;
     std::cout << "s:\n" << box_size << std::endl;
 
-    int n = 10;
+    int n = 50;
     Eigen::Vector3d box_step = box_size / n;
     Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(n * n * n, 3);
     int nrow = 0;
@@ -51,26 +51,52 @@ int main(int argc, char *argv[]) {
       }
     }
 
-
     Eigen::MatrixXd Qinside;
     {
-      igl::FastWindingNumberBVH fwn;
+      igl::FastWindingNumberBVH fwn_bvh;
+      igl::fast_winding_number(V.cast<float>(), F, 2, fwn_bvh);
+
+      Eigen::VectorXf W;
+      igl::fast_winding_number(fwn_bvh, 2, Q.cast<float>(), W);
+      igl::slice_mask(Q, W.array() > 0.5, 1, Qinside);
+
+      Eigen::VectorXf W2;
+      W2.resize(Q.rows(), 1);
+      int accuracy_scale = 2;
+      float factor_inv = 1 / (4.0 * igl::PI);
+      const double t_before = igl::get_seconds();
+      for (int i = 0; i < Q.rows(); i++) {
+        igl::FastWindingNumber::HDK_Sample::UT_Vector3T<float> Qp;
+        Qp[0] = Q(i, 0);
+        Qp[1] = Q(i, 1);
+        Qp[2] = Q(i, 2);
+        W2(i) = fwn_bvh.ut_solid_angle.computeSolidAngle(Qp, accuracy_scale) *
+               factor_inv;
+      }
+      const double t_after = igl::get_seconds();
+      const double delta = t_after - t_before;
+      const double cost_per_pt = delta / Q.rows();
+      std::cout << "computation time:" << delta << std::endl;
+      std::cout << "computation time (per pt):" << cost_per_pt << std::endl;
     }
 
-
-    std::cout << Q << std::endl;
+    std::cout << "Q total  " << Q.rows() << std::endl;
+    std::cout << "Q inside " << Qinside.rows() << std::endl;
 
     int mesh_data = 0;
     int point_data = 1;
 
-    viewer.data_list[mesh_data].set_mesh(V, F);
-    viewer.data_list[mesh_data].set_face_based(true);
+    viewer.data_list[mesh_data].set_points(V,
+                                           Eigen::RowVector3d(1.0, 0.0, 0.0));
+    viewer.data_list[mesh_data].point_size = 1;
+    // viewer.data_list[mesh_data].set_face_based(true);
 
     viewer.append_mesh();
-    viewer.data_list[point_data].set_points(
-        Q, Eigen::RowVector3d(0.996078, 0.760784, 0.760784));
+    viewer.data_list[point_data].set_points(Qinside,
+                                            Eigen::RowVector3d(0.0, 1.0, 0.0));
+    viewer.data_list[point_data].point_size = 2;
   }
 
   return viewer.launch();
-  //return 0;
+  // return 0;
 }
